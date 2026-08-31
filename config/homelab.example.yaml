@@ -45,12 +45,20 @@ homeassistant:
   verify_tls: true
 
 esphome:
-  # The ESPHome dashboard add-on. If it is not exposed, leave url empty and set
-  # ssh_host instead to edit YAML and run the esphome CLI over SSH.
-  url: http://homeassistant.local:6052
+  # Three ways to reach ESPHome, in priority order:
+  #  1. url set -> the ESPHome dashboard add-on over HTTP/websocket.
+  #  2. ssh_host only -> the `esphome` CLI + YAML live directly on that host.
+  #  3. ssh_host + docker_container -> the CLI + YAML live inside a Docker
+  #     container on that host. This is the usual Home Assistant OS layout: the
+  #     ESPHome add-on runs as a container (e.g. app_<slug>_esphome) and there
+  #     is no `esphome` binary on the HAOS host itself. config_dir is then the
+  #     path *inside* the container.
+  # Find the container name with:  ssh <ssh_host> "docker ps --format '{{.Names}}' | grep esphome"
+  url: ""
   token: ${ESPHOME_TOKEN:-}
   config_dir: /config/esphome
   ssh_host: ""
+  docker_container: ""
 
 ssh:
   default_user: root

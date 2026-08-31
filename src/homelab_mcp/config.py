@@ -120,6 +120,11 @@ class ESPHomeConfig:
     config_dir: str = "/config/esphome"
     ssh_host: str = ""
     """Optional SSH host used as a fallback for reading/writing YAML."""
+    docker_container: str = ""
+    """When set, the esphome CLI and YAML files live inside this Docker
+    container on ``ssh_host`` (e.g. the Home Assistant ESPHome add-on), so
+    commands run as ``docker exec <container> ...`` and ``config_dir`` is the
+    path *inside* the container."""
 
     @property
     def enabled(self) -> bool:
@@ -236,6 +241,7 @@ class Config:
             verify_tls=as_bool(esp.get("verify_tls"), True),
             config_dir=esp.get("config_dir", "/config/esphome"),
             ssh_host=esp.get("ssh_host", ""),
+            docker_container=esp.get("docker_container", ""),
         )
 
         ssh = data.get("ssh") or {}

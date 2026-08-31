@@ -1,8 +1,17 @@
 """ESPHome tools: list nodes, read/edit YAML, validate and flash over OTA.
 
-Works either against the ESPHome dashboard add-on (HTTP/websocket) or, when
-only ``esphome.ssh_host`` is configured, by editing the YAML files directly
-over SSH and driving the ``esphome`` CLI on the host.
+Three transports, chosen by configuration:
+
+* ``esphome.url`` set — talk to the ESPHome **dashboard** add-on over
+  HTTP/websocket.
+* ``esphome.ssh_host`` set, no ``docker_container`` — the ``esphome`` CLI and
+  the YAML files live directly on that host.
+* ``esphome.ssh_host`` + ``docker_container`` set — the CLI and YAML live
+  **inside a Docker container** on that host (the typical Home Assistant OS +
+  ESPHome add-on layout, where the add-on runs as e.g.
+  ``app_5c53de3b_esphome`` and there is no ``esphome`` binary on the HAOS host
+  itself). Commands run as ``docker exec <container> ...`` and ``config_dir``
+  is the path inside the container.
 """
 
 from __future__ import annotations
@@ -25,20 +34,73 @@ def register(mcp: FastMCP, lab: Homelab) -> None:
     def _use_ssh() -> bool:
         return not cfg.url and bool(cfg.ssh_host)
 
+    def _in_container() -> bool:
+        return bool(cfg.docker_container)
+
+    def _norm(name: str) -> str:
+        return name if name.endswith(".yaml") else f"{name}.yaml"
+
     def _yaml_path(name: str) -> str:
-        name = name if name.endswith(".yaml") else f"{name}.yaml"
-        return f"{cfg.config_dir.rstrip('/')}/{name}"
+        return f"{cfg.config_dir.rstrip('/')}/{_norm(name)}"
+
+    def _exec_prefix() -> str:
+        if _in_container():
+            return f"docker exec {shlex.quote(cfg.docker_container)} "
+        return ""
+
+    async def _cli(args: str, timeout: int) -> Any:
+        """Run an ``esphome <args>`` command on the ssh host (optionally in-container)."""
+        return await lab.ssh.run(cfg.ssh_host, f"{_exec_prefix()}esphome {args}", timeout=timeout)
+
+    async def _read_yaml(name: str) -> str:
+        path = _yaml_path(name)
+        if _in_container():
+            result = await lab.ssh.run(
+                cfg.ssh_host,
+                f"docker exec {shlex.quote(cfg.docker_container)} cat {shlex.quote(path)}",
+                check=True,
+            )
+            return result.stdout
+        return await lab.ssh.read_file(cfg.ssh_host, path)
+
+    async def _backup_yaml(name: str) -> str | None:
+        path = _yaml_path(name)
+        quoted = shlex.quote(path)
+        stamp = "$(date +%Y%m%d%H%M%S)"
+        inner = (
+            f'if [ -f {quoted} ]; then b={quoted}.bak-{stamp}; '
+            f'cp -p {quoted} "$b"; echo "$b"; fi'
+        )
+        if _in_container():
+            cmd = f"docker exec {shlex.quote(cfg.docker_container)} sh -c {shlex.quote(inner)}"
+        else:
+            cmd = inner
+        probe = await lab.ssh.run(cfg.ssh_host, cmd)
+        return probe.stdout.strip() or None
+
+    async def _write_yaml(name: str, content: str) -> None:
+        path = _yaml_path(name)
+        if _in_container():
+            cmd = (
+                f"docker exec -i {shlex.quote(cfg.docker_container)} "
+                f"sh -c {shlex.quote(f'cat > {shlex.quote(path)}')}"
+            )
+            await lab.ssh.run(cfg.ssh_host, cmd, stdin=content, check=True)
+        else:
+            await lab.ssh.write_file(cfg.ssh_host, path, content)
 
     @mcp.tool()
     async def esphome_devices() -> Any:
         """List ESPHome nodes known to the dashboard (or YAML files over SSH)."""
         if _use_ssh():
-            result = await lab.ssh.run(
-                cfg.ssh_host,
-                f"ls -1 {shlex.quote(cfg.config_dir)}/*.yaml 2>/dev/null",
-            )
+            listing = f"ls -1 {shlex.quote(cfg.config_dir)}/*.yaml 2>/dev/null"
+            cmd = f"{_exec_prefix()}sh -c {shlex.quote(listing)}" if _in_container() else listing
+            result = await lab.ssh.run(cfg.ssh_host, cmd)
             files = [line.rsplit("/", 1)[-1] for line in result.stdout.split() if line.strip()]
-            return {"source": f"ssh:{cfg.ssh_host}", "configs": files}
+            source = f"ssh:{cfg.ssh_host}"
+            if _in_container():
+                source += f" (docker:{cfg.docker_container})"
+            return {"source": source, "configs": files}
         data = await esp.devices()
         configured = [
             {
@@ -68,9 +130,8 @@ def register(mcp: FastMCP, lab: Homelab) -> None:
             configuration: the file name, e.g. "studna.yaml" or "kury".
         """
         if _use_ssh():
-            return truncate(await lab.ssh.read_file(cfg.ssh_host, _yaml_path(configuration)), limit)
-        name = configuration if configuration.endswith(".yaml") else f"{configuration}.yaml"
-        return truncate(await esp.read_config(name), limit)
+            return truncate(await _read_yaml(configuration), limit)
+        return truncate(await esp.read_config(_norm(configuration)), limit)
 
     @mcp.tool()
     async def esphome_write(
@@ -83,35 +144,22 @@ def register(mcp: FastMCP, lab: Homelab) -> None:
             content: the full new YAML contents.
             backup: over SSH, keep a timestamped backup of the previous file.
         """
-        name = configuration if configuration.endswith(".yaml") else f"{configuration}.yaml"
+        name = _norm(configuration)
         lab.audit.record("esphome_write", configuration=name, bytes=len(content))
         if _use_ssh():
-            path = _yaml_path(name)
-            backup_path = None
-            if backup:
-                quoted = shlex.quote(path)
-                probe = await lab.ssh.run(
-                    cfg.ssh_host,
-                    f"if [ -f {quoted} ]; then b={quoted}.bak-$(date +%Y%m%d%H%M%S); "
-                    f"cp -p {quoted} \"$b\"; echo \"$b\"; fi",
-                )
-                backup_path = probe.stdout.strip() or None
-            await lab.ssh.write_file(cfg.ssh_host, path, content)
-            return {"configuration": name, "path": path, "backup": backup_path}
+            backup_path = await _backup_yaml(name) if backup else None
+            await _write_yaml(name, content)
+            return {"configuration": name, "path": _yaml_path(name), "backup": backup_path}
         await esp.write_config(name, content)
         return {"configuration": name, "written": True}
 
     @mcp.tool()
     async def esphome_validate(configuration: str) -> dict[str, Any]:
         """Validate an ESPHome configuration without flashing."""
-        name = configuration if configuration.endswith(".yaml") else f"{configuration}.yaml"
+        name = _norm(configuration)
         lab.audit.record("esphome_validate", configuration=name)
         if _use_ssh():
-            result = await lab.ssh.run(
-                cfg.ssh_host,
-                f"esphome config {shlex.quote(_yaml_path(name))}",
-                timeout=300,
-            )
+            result = await _cli(f"config {shlex.quote(_yaml_path(name))}", timeout=300)
             return {
                 "configuration": name,
                 "success": result.exit_status == 0,
@@ -127,15 +175,11 @@ def register(mcp: FastMCP, lab: Homelab) -> None:
             configuration: the file name, e.g. "kury.yaml".
             method: "OTA" (default, over the network) or "compile" to only build.
         """
-        name = configuration if configuration.endswith(".yaml") else f"{configuration}.yaml"
+        name = _norm(configuration)
         lab.audit.record("esphome_flash", configuration=name, method=method)
         if _use_ssh():
             verb = "compile" if method.lower() == "compile" else "run --no-logs"
-            result = await lab.ssh.run(
-                cfg.ssh_host,
-                f"esphome {verb} {shlex.quote(_yaml_path(name))}",
-                timeout=1200,
-            )
+            result = await _cli(f"{verb} {shlex.quote(_yaml_path(name))}", timeout=1200)
             return {
                 "configuration": name,
                 "method": method,
@@ -148,16 +192,20 @@ def register(mcp: FastMCP, lab: Homelab) -> None:
     @mcp.tool()
     async def esphome_delete(configuration: str) -> dict[str, Any]:
         """Delete an ESPHome configuration file (a backup is kept over SSH)."""
-        name = configuration if configuration.endswith(".yaml") else f"{configuration}.yaml"
+        name = _norm(configuration)
         lab.audit.record("esphome_delete", configuration=name)
         if _use_ssh():
             path = _yaml_path(name)
             quoted = shlex.quote(path)
-            result = await lab.ssh.run(
-                cfg.ssh_host,
+            inner = (
                 f"if [ -f {quoted} ]; then mv {quoted} {quoted}.deleted-$(date +%Y%m%d%H%M%S); "
-                f"echo removed; else echo 'not found'; fi",
+                f"echo removed; else echo 'not found'; fi"
             )
+            if _in_container():
+                cmd = f"docker exec {shlex.quote(cfg.docker_container)} sh -c {shlex.quote(inner)}"
+            else:
+                cmd = inner
+            result = await lab.ssh.run(cfg.ssh_host, cmd)
             return {"configuration": name, "result": result.stdout.strip()}
         await esp.delete_config(name)
         return {"configuration": name, "deleted": True}
@@ -165,12 +213,10 @@ def register(mcp: FastMCP, lab: Homelab) -> None:
     @mcp.tool()
     async def esphome_logs(configuration: str, lines: int = 200) -> str:
         """Stream device logs for a short window (OTA logs; may time out if noisy)."""
-        name = configuration if configuration.endswith(".yaml") else f"{configuration}.yaml"
+        name = _norm(configuration)
         if _use_ssh():
-            result = await lab.ssh.run(
-                cfg.ssh_host,
-                f"timeout 25 esphome logs {shlex.quote(_yaml_path(name))} 2>&1 "
-                f"| head -n {int(lines)}",
+            result = await _cli(
+                f"logs {shlex.quote(_yaml_path(name))} 2>&1 | head -n {int(lines)}",
                 timeout=40,
             )
             return truncate(result.stdout + result.stderr, limit)

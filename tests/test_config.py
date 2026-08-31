@@ -69,3 +69,18 @@ def test_env_fallback(monkeypatch, tmp_path):
     cfg = Config.load()
     assert cfg.homeassistant.url == "http://ha.local:8123"
     assert cfg.homeassistant.enabled
+
+
+def test_esphome_docker_container():
+    cfg = Config.from_dict(
+        {
+            "esphome": {
+                "ssh_host": "HA",
+                "docker_container": "app_5c53de3b_esphome",
+                "config_dir": "/config/esphome",
+            }
+        }
+    )
+    assert cfg.esphome.enabled
+    assert cfg.esphome.docker_container == "app_5c53de3b_esphome"
+    assert cfg.esphome.url == ""

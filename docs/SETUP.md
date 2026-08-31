@@ -61,6 +61,12 @@ Put the token in `HA_TOKEN=...` in the env file and set
   `esphome.ssh_host` to a host that has the `esphome` CLI and the YAML under
   `esphome.config_dir` (usually the HA host). The server then edits the files
   and runs `esphome` over SSH.
+- On **Home Assistant OS** the `esphome` binary is not on the host — it lives
+  in the add-on's Docker container. Set `esphome.ssh_host` to the HA host and
+  `esphome.docker_container` to the add-on container; the server then runs
+  `docker exec <container> esphome ...` and reads/writes the YAML inside it.
+  Find the name with:
+  `ssh <ssh_host> "docker ps --format '{{.Names}}' | grep esphome"`.
 
 ## 5. SSH access to your hosts
 
