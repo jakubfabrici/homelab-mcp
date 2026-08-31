@@ -15,6 +15,9 @@ lab through **one authenticated HTTPS endpoint**:
   dashboard add-on or over SSH.
 - **Shell & Docker** — run commands, read/write files, manage systemd units and
   journals, and manage Docker/compose on any host over SSH.
+- **Fully Kiosk** — control Fully Kiosk Browser tablets over the Remote Admin
+  API: screenshot, load a URL, screen on/off, brightness, text-to-speech,
+  restart, and a raw command escape hatch.
 - **Network** — ping sweep, TCP port scan and ARP/neighbour tables to discover
   what is on the LAN.
 

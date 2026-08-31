@@ -78,6 +78,16 @@ ssh:
       host: 192.168.1.30
       description: Home Assistant OS host
 
+fullykiosk:
+  # Fully Kiosk Browser tablets/kiosks controlled over the Remote Admin REST
+  # API. Enable "Remote Administration" (and set its password) in the Fully
+  # Kiosk app: Settings -> Remote Administration. Default port 2323.
+  password: ${FULLYKIOSK_PASSWORD:-}   # shared default; a device can override
+  port: 2323
+  devices:
+    tablet: 192.168.1.152
+    # kuchyna: { host: 192.168.1.153, password: ${FULLYKIOSK_KUCHYNA:-} }
+
 network:
   # Subnets net_scan may sweep by default.
   subnets:

@@ -159,6 +159,24 @@ class SSHConfig:
 
 
 @dataclass(slots=True)
+class FullyKioskDevice:
+    name: str
+    host: str
+    password: str = ""
+    port: int = 2323
+    description: str = ""
+
+
+@dataclass(slots=True)
+class FullyKioskConfig:
+    devices: dict[str, FullyKioskDevice] = field(default_factory=dict)
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.devices)
+
+
+@dataclass(slots=True)
 class NetworkConfig:
     subnets: list[str] = field(default_factory=list)
     default_ports: list[int] = field(
@@ -192,6 +210,7 @@ class Config:
     homeassistant: HomeAssistantConfig = field(default_factory=HomeAssistantConfig)
     esphome: ESPHomeConfig = field(default_factory=ESPHomeConfig)
     ssh: SSHConfig = field(default_factory=SSHConfig)
+    fullykiosk: FullyKioskConfig = field(default_factory=FullyKioskConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
     source: str = "<defaults>"
 
@@ -271,6 +290,23 @@ class Config:
             command_timeout=int(ssh.get("command_timeout", 300)),
             hosts=hosts,
         )
+
+        fk = data.get("fullykiosk") or {}
+        fk_default_password = fk.get("password", "")
+        fk_default_port = int(fk.get("port", 2323))
+        fk_devices: dict[str, FullyKioskDevice] = {}
+        for name, spec in (fk.get("devices") or {}).items():
+            spec = spec or {}
+            if isinstance(spec, str):
+                spec = {"host": spec}
+            fk_devices[name] = FullyKioskDevice(
+                name=name,
+                host=spec.get("host", name),
+                password=spec.get("password", fk_default_password),
+                port=int(spec.get("port", fk_default_port)),
+                description=spec.get("description", ""),
+            )
+        cfg.fullykiosk = FullyKioskConfig(devices=fk_devices)
 
         net = data.get("network") or {}
         cfg.network = NetworkConfig(

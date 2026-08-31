@@ -125,3 +125,24 @@ def test_load_env_file_missing_is_noop(tmp_path):
     from homelab_mcp.__main__ import load_env_file
 
     assert load_env_file(tmp_path / "nope.env") == 0
+
+
+def test_fullykiosk_devices_and_shared_password():
+    cfg = Config.from_dict(
+        {
+            "fullykiosk": {
+                "password": "shared",
+                "port": 2323,
+                "devices": {
+                    "tablet": "192.168.1.152",
+                    "kuchyna": {"host": "192.168.1.153", "password": "own", "port": 2324},
+                },
+            }
+        }
+    )
+    assert cfg.fullykiosk.enabled
+    assert cfg.fullykiosk.devices["tablet"].host == "192.168.1.152"
+    assert cfg.fullykiosk.devices["tablet"].password == "shared"
+    assert cfg.fullykiosk.devices["tablet"].port == 2323
+    assert cfg.fullykiosk.devices["kuchyna"].password == "own"
+    assert cfg.fullykiosk.devices["kuchyna"].port == 2324

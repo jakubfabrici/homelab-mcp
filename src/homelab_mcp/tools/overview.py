@@ -65,6 +65,12 @@ def register(mcp: FastMCP, lab: Homelab) -> None:
             except ToolError as exc:
                 report["esphome"] = {"error": str(exc)}
 
+        if modules["fullykiosk"]:
+            report["fullykiosk_devices"] = [
+                {"name": d.name, "host": d.host, "description": d.description}
+                for d in lab.fullykiosk.config.devices.values()
+            ]
+
         if modules["ssh"]:
             report["ssh_hosts"] = [
                 {"name": h.name, "address": h.host, "description": h.description}
