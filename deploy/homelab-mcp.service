@@ -1,0 +1,29 @@
+[Unit]
+Description=homelab-mcp (Proxmox / Home Assistant / ESPHome MCP server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab-mcp
+Group=homelab-mcp
+# Secrets referenced as ${VAR} in homelab.yaml come from here (chmod 600):
+EnvironmentFile=-/etc/homelab-mcp/homelab-mcp.env
+Environment=HOMELAB_MCP_CONFIG=/etc/homelab-mcp/homelab.yaml
+ExecStart=/opt/homelab-mcp/.venv/bin/homelab-mcp
+Restart=on-failure
+RestartSec=3
+
+# Hardening (the process still needs outbound network + its SSH key).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/log/homelab-mcp
+ReadOnlyPaths=/etc/homelab-mcp
+ProtectControlGroups=true
+ProtectKernelModules=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

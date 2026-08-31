@@ -1,0 +1,77 @@
+# homelab-mcp configuration.
+#
+# Copy to config/homelab.yaml (git-ignored) or /etc/homelab-mcp/homelab.yaml and
+# fill in. Any value may use ${ENV_VAR} or ${ENV_VAR:-default} so secrets can be
+# injected from the environment / a systemd EnvironmentFile instead of sitting
+# in this file.
+
+server:
+  host: 0.0.0.0
+  port: 8787
+  path: /mcp
+  # Bearer token every client must send: Authorization: Bearer <token>.
+  # Generate one with:  openssl rand -hex 32
+  auth_token: ${MCP_AUTH_TOKEN}
+  # Optional: only allow these client IPs/CIDRs (checked after the token).
+  allowed_ips: []
+  # Reverse proxies whose X-Forwarded-For we trust (e.g. the nginx/NPM host).
+  trusted_proxies:
+    - 127.0.0.1/32
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+  audit_log: /var/log/homelab-mcp/audit.jsonl
+  log_level: INFO
+  # Leave false for full access (your choice). Set true to refuse a tiny set of
+  # obviously catastrophic shell commands (rm -rf /, mkfs, dd to a disk, ...).
+  guard_destructive: false
+
+proxmox:
+  host: 192.168.1.10          # Proxmox node / cluster address
+  port: 8006
+  # Create under Datacenter -> Permissions -> API Tokens. Give it PVEAdmin on /
+  # (or narrower). Use the token, never the root password.
+  token_id: root@pam!claude   # user@realm!tokenname
+  token_secret: ${PROXMOX_TOKEN_SECRET}
+  verify_tls: false
+  # Name of the ssh host entry (below) that is the Proxmox node itself; used for
+  # `pct exec` into LXC containers.
+  ssh_host: pve
+
+homeassistant:
+  url: https://ha.fabrici.xyz
+  # Profile -> Security -> Long-lived access tokens.
+  token: ${HA_TOKEN}
+  verify_tls: true
+
+esphome:
+  # The ESPHome dashboard add-on. If it is not exposed, leave url empty and set
+  # ssh_host instead to edit YAML and run the esphome CLI over SSH.
+  url: http://homeassistant.local:6052
+  token: ${ESPHOME_TOKEN:-}
+  config_dir: /config/esphome
+  ssh_host: ""
+
+ssh:
+  default_user: root
+  key_file: /etc/homelab-mcp/id_ed25519
+  # known_hosts empty = do not verify host keys (fine on a trusted LAN).
+  known_hosts: ""
+  command_timeout: 300
+  hosts:
+    pve:
+      host: 192.168.1.10
+      description: Proxmox VE node
+    nas:
+      host: 192.168.1.20
+      user: root
+      description: NAS / Docker host
+    ha:
+      host: 192.168.1.30
+      description: Home Assistant OS host
+
+network:
+  # Subnets net_scan may sweep by default.
+  subnets:
+    - 192.168.1.0/24
+  scan_timeout: 0.6

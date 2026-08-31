@@ -1,0 +1,90 @@
+# homelab-mcp
+
+An [MCP](https://modelcontextprotocol.io) server that gives an assistant
+(Claude Code, the Claude app, or any MCP client) operational access to a home
+lab through **one authenticated HTTPS endpoint**:
+
+- **Proxmox VE** — list nodes and every VM/LXC (discovered live, so new guests
+  appear automatically), start/stop/reboot, edit guest config, snapshots,
+  storage, run commands inside guests (`pct exec` / QEMU guest agent), and a
+  raw API escape hatch.
+- **Home Assistant** — read states, call services, drive automations, browse the
+  area/device/entity registries (incl. ESPHome devices), history, logbook,
+  error log, plus raw REST and WebSocket escape hatches.
+- **ESPHome** — list nodes, read/edit YAML, validate and flash over OTA, via the
+  dashboard add-on or over SSH.
+- **Shell & Docker** — run commands, read/write files, manage systemd units and
+  journals, and manage Docker/compose on any host over SSH.
+- **Network** — ping sweep, TCP port scan and ARP/neighbour tables to discover
+  what is on the LAN.
+
+Call `homelab_overview` first — it reports which backends are configured and
+gives a live inventory of each.
+
+## How it fits together
+
+```
+Claude app / Claude Code
+        │  HTTPS + Bearer token
+        ▼
+  mcp.fabrici.xyz   (your reverse proxy: nginx / NPM / Traefik)
+        │  http://127.0.0.1:8787/mcp
+        ▼
+   homelab-mcp   ──► Proxmox API (token)
+   (LXC/VM/Docker)──► Home Assistant (REST + WS)
+        │        ──► ESPHome dashboard
+        └────────►  SSH to hosts, network scans
+```
+
+The server speaks **streamable HTTP MCP** and enforces a bearer token (and an
+optional IP allowlist) itself, so it is safe to expose behind your existing
+reverse proxy alongside `ha.fabrici.xyz`.
+
+## Quick start
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -e .
+
+cp config/homelab.example.yaml config/homelab.yaml
+$EDITOR config/homelab.yaml            # fill in hosts, tokens, ssh key
+
+export MCP_AUTH_TOKEN=$(openssl rand -hex 32)   # or put it in the file
+homelab-mcp --check                    # validate config, list modules
+homelab-mcp                            # serve on :8787/mcp
+```
+
+Every module is optional: leave a section blank and its tools report that they
+are not configured instead of failing the whole server.
+
+## Deployment
+
+The intended target is a small LXC container on Proxmox. See
+[`deploy/`](deploy/) for a systemd unit, an install script and reverse-proxy
+snippets (nginx / Nginx Proxy Manager). [`docs/SETUP.md`](docs/SETUP.md) walks
+through provisioning the Proxmox API token, the Home Assistant token, the SSH
+key and the `mcp.fabrici.xyz` proxy entry end to end.
+
+## Connecting a client
+
+Add to the Claude app / Claude Code as a remote MCP server:
+
+- **URL**: `https://mcp.fabrici.xyz/mcp`
+- **Header**: `Authorization: Bearer <MCP_AUTH_TOKEN>`
+
+## Security
+
+The user of this repo chose **full access** (unrestricted shell, all write
+tools). That is powerful: the bearer token is effectively root on the whole
+network. Accordingly the server:
+
+- requires a bearer token on every request (`hmac.compare_digest`);
+- supports an IP allowlist, with `X-Forwarded-For` honoured only from trusted
+  proxies so it cannot be spoofed;
+- writes a redacted JSONL **audit log** of every state-changing call;
+- keeps timestamped backups when overwriting files;
+- can optionally refuse a small set of catastrophic commands
+  (`guard_destructive: true`) — off by default, per the chosen posture.
+
+Secrets never go in git: `config/homelab.yaml`, `.env` and SSH keys are
+git-ignored, and config values can be pulled from environment variables.
