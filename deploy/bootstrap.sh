@@ -33,6 +33,9 @@ PVE_TOKEN_USER="${PVE_TOKEN_USER:-root@pam}"
 PVE_TOKEN_NAME="${PVE_TOKEN_NAME:-mcp-server}"
 
 CT_IP="${IP_CIDR%%/*}"
+# Directory of the repo this script lives in, so the container is populated
+# from the host's checkout (no GitHub credentials needed inside the LXC).
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 say() { printf '\n\033[1;36m>> %s\033[0m\n' "$*"; }
 
 # ---- 1. LXC ----------------------------------------------------------------
@@ -61,11 +64,16 @@ say "waiting for container network"
 for _ in $(seq 1 30); do inct "getent hosts deb.debian.org >/dev/null 2>&1" && break; sleep 2; done
 
 # ---- 2. install homelab-mcp inside the container ---------------------------
-say "installing packages + homelab-mcp in the container"
-inct "apt-get update -qq && apt-get install -y -qq git ca-certificates >/dev/null"
-inct "test -d /opt/homelab-mcp/.git || git clone --depth 1 -b '$BRANCH' '$REPO_URL' /opt/homelab-mcp"
-inct "cd /opt/homelab-mcp && git fetch --depth 1 origin '$BRANCH' -q && git reset --hard origin/'$BRANCH' -q"
-inct "bash /opt/homelab-mcp/deploy/install.sh"
+# Push the host's checkout into the container as a tarball so the LXC never
+# needs GitHub access itself (the repo is private).
+say "copying source ($REPO_DIR) into the container and installing"
+inct "apt-get update -qq && apt-get install -y -qq ca-certificates rsync >/dev/null"
+TARBALL="/tmp/homelab-mcp-src.tar.gz"
+tar -C "$REPO_DIR" --exclude=.git --exclude=.venv -czf "$TARBALL" .
+inct "rm -rf /opt/homelab-mcp-src && mkdir -p /opt/homelab-mcp-src"
+pct push "$VMID" "$TARBALL" /tmp/homelab-mcp-src.tar.gz
+inct "tar -C /opt/homelab-mcp-src -xzf /tmp/homelab-mcp-src.tar.gz"
+inct "SRC_DIR=/opt/homelab-mcp-src bash /opt/homelab-mcp-src/deploy/install.sh"
 
 # ---- 3. Proxmox API token (secret captured on-box) -------------------------
 say "ensuring Proxmox API token ${PVE_TOKEN_USER}!${PVE_TOKEN_NAME} with rights"

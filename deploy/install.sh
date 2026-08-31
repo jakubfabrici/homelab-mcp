@@ -17,10 +17,21 @@ echo ">> creating service user and directories"
 id homelab-mcp &>/dev/null || useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin homelab-mcp
 mkdir -p "$APP_DIR" "$CFG_DIR" "$LOG_DIR"
 
-echo ">> fetching source into $APP_DIR"
-if [ -d "$APP_DIR/.git" ]; then
+# Source can come from a local directory (SRC_DIR) so a private repo does not
+# need GitHub credentials on this machine; otherwise fall back to git clone.
+if [ -n "${SRC_DIR:-}" ]; then
+  echo ">> copying source from $SRC_DIR into $APP_DIR"
+  mkdir -p "$APP_DIR"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete --exclude '.venv' --exclude '.git' "$SRC_DIR"/ "$APP_DIR"/
+  else
+    cp -a "$SRC_DIR"/. "$APP_DIR"/
+  fi
+elif [ -d "$APP_DIR/.git" ]; then
+  echo ">> updating existing checkout in $APP_DIR"
   git -C "$APP_DIR" fetch --depth 1 origin "$BRANCH" && git -C "$APP_DIR" checkout -f "$BRANCH" && git -C "$APP_DIR" reset --hard "origin/$BRANCH"
 else
+  echo ">> cloning $REPO_URL into $APP_DIR"
   git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
 fi
 
