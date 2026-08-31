@@ -76,10 +76,24 @@ inct "tar -C /opt/homelab-mcp-src -xzf /tmp/homelab-mcp-src.tar.gz"
 inct "SRC_DIR=/opt/homelab-mcp-src bash /opt/homelab-mcp-src/deploy/install.sh"
 
 # ---- 3. Proxmox API token (secret captured on-box) -------------------------
+# Idempotent: a Proxmox token secret is shown only once, so only (re)create the
+# token when the container does not already hold a real secret. Re-running must
+# NOT rotate a working secret out from under the deployed server.
 say "ensuring Proxmox API token ${PVE_TOKEN_USER}!${PVE_TOKEN_NAME} with rights"
-pveum user token remove "$PVE_TOKEN_USER" "$PVE_TOKEN_NAME" 2>/dev/null || true
-TOKOUT=$(pveum user token add "$PVE_TOKEN_USER" "$PVE_TOKEN_NAME" --privsep 1 --output-format json)
-PVE_SECRET=$(printf '%s' "$TOKOUT" | python3 -c 'import sys,json;print(json.load(sys.stdin)["value"])')
+EXISTING_SECRET=$(inct "grep '^PROXMOX_TOKEN_SECRET=' /etc/homelab-mcp/homelab-mcp.env 2>/dev/null | cut -d= -f2-" || true)
+TOKEN_EXISTS=$(pveum user token list "$PVE_TOKEN_USER" --output-format json 2>/dev/null \
+  | python3 -c "import sys,json;print(any(t['tokenid']=='${PVE_TOKEN_NAME}' for t in json.load(sys.stdin)))" 2>/dev/null || echo False)
+case "$EXISTING_SECRET" in ""|changeme|"\${PROXMOX_TOKEN_SECRET}") HAS_REAL_SECRET=0;; *) HAS_REAL_SECRET=1;; esac
+
+if [ "$TOKEN_EXISTS" = "True" ] && [ "$HAS_REAL_SECRET" = "1" ]; then
+  echo "   token already exists and the container holds a secret -> reusing (no rotation)"
+  PVE_SECRET="$EXISTING_SECRET"
+else
+  pveum user token remove "$PVE_TOKEN_USER" "$PVE_TOKEN_NAME" 2>/dev/null || true
+  TOKOUT=$(pveum user token add "$PVE_TOKEN_USER" "$PVE_TOKEN_NAME" --privsep 1 --output-format json)
+  PVE_SECRET=$(printf '%s' "$TOKOUT" | python3 -c 'import sys,json;print(json.load(sys.stdin)["value"])')
+  echo "   fresh token created"
+fi
 pveum acl modify / --tokens "${PVE_TOKEN_USER}!${PVE_TOKEN_NAME}" --roles PVEVMAdmin,PVEAuditor,PVEDatastoreUser
 echo "   token rights granted (PVEVMAdmin,PVEAuditor,PVEDatastoreUser)"
 
@@ -107,6 +121,10 @@ p.write_text('\n'.join(lines)+'\n'); import os; os.chmod(p,0o600)
 print('env updated:', [l.split('=',1)[0] for l in lines])
 PY"
 
+# ---- 6. tidy up ------------------------------------------------------------
+rm -f "$TARBALL"
+inct "rm -f /tmp/homelab-mcp-src.tar.gz" || true
+
 echo
 say "DONE (server installed and configured on ${CT_IP})"
 cat <<NEXT
@@ -122,9 +140,10 @@ Remaining manual steps:
      unifi, jellyfin, heimdall, changedetection, qbittorrent):
        ssh-copy-id -i /etc/homelab-mcp/id_ed25519.pub root@<host>
      (or append it to each host's ~/.ssh/authorized_keys)
-  4. Start / restart and check:
+  4. Start / restart and check (the CLI needs the env file sourced; systemd
+     already does this for the running service):
        pct exec $VMID -- systemctl restart homelab-mcp
-       pct exec $VMID -- /opt/homelab-mcp/.venv/bin/homelab-mcp --check
+       pct exec $VMID -- bash -lc 'set -a; . /etc/homelab-mcp/homelab-mcp.env; set +a; /opt/homelab-mcp/.venv/bin/homelab-mcp --check'
        pct exec $VMID -- curl -s http://localhost:8787/health
   5. Add the mcp.fabrici.xyz proxy host in NPM -> forward to ${CT_IP}:8787
      (see deploy/nginx-proxy-manager.md)
