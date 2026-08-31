@@ -84,3 +84,44 @@ def test_esphome_docker_container():
     assert cfg.esphome.enabled
     assert cfg.esphome.docker_container == "app_5c53de3b_esphome"
     assert cfg.esphome.url == ""
+
+
+def test_load_env_file(tmp_path, monkeypatch):
+    from homelab_mcp.__main__ import load_env_file
+
+    env = tmp_path / "mcp.env"
+    env.write_text(
+        "# comment\n"
+        "MCP_AUTH_TOKEN=abc123\n"
+        "export PROXMOX_TOKEN_SECRET=\"s3cr3t\"\n"
+        "HA_TOKEN=<paste>\n"
+        "EMPTY=\n"
+    )
+    for k in ("MCP_AUTH_TOKEN", "PROXMOX_TOKEN_SECRET", "HA_TOKEN", "EMPTY"):
+        monkeypatch.delenv(k, raising=False)
+    n = load_env_file(env)
+    assert n == 4
+    import os
+
+    assert os.environ["MCP_AUTH_TOKEN"] == "abc123"
+    assert os.environ["PROXMOX_TOKEN_SECRET"] == "s3cr3t"
+    # a value with shell metacharacters loads verbatim (no sourcing)
+    assert os.environ["HA_TOKEN"] == "<paste>"
+
+
+def test_load_env_file_does_not_override(tmp_path, monkeypatch):
+    from homelab_mcp.__main__ import load_env_file
+
+    env = tmp_path / "mcp.env"
+    env.write_text("MCP_AUTH_TOKEN=fromfile\n")
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "fromenv")
+    load_env_file(env)
+    import os
+
+    assert os.environ["MCP_AUTH_TOKEN"] == "fromenv"
+
+
+def test_load_env_file_missing_is_noop(tmp_path):
+    from homelab_mcp.__main__ import load_env_file
+
+    assert load_env_file(tmp_path / "nope.env") == 0

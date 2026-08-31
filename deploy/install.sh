@@ -11,7 +11,7 @@ BRANCH="${BRANCH:-claude/mcp-server-proxmox-e98e5k}"
 
 echo ">> installing system packages"
 apt-get update -qq
-apt-get install -y -qq python3 python3-venv python3-pip git openssh-client iputils-ping iproute2
+apt-get install -y -qq python3 python3-venv python3-pip git curl openssh-client iputils-ping iproute2
 
 echo ">> creating service user and directories"
 id homelab-mcp &>/dev/null || useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin homelab-mcp

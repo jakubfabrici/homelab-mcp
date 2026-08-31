@@ -43,11 +43,11 @@ if pct status "$VMID" &>/dev/null; then
   say "LXC $VMID already exists, reusing it"
 else
   say "creating LXC $VMID ($HOSTNAME_) at $IP_CIDR"
-  TMPL=$(pveam list "$TEMPLATE_STORE" 2>/dev/null | awk '/debian-12.*amd64/{print $1}' | tail -1)
+  TMPL=$(pveam list "$TEMPLATE_STORE" 2>/dev/null | awk '/debian-12.*amd64/{print $1}' | sort -V | tail -1)
   if [ -z "${TMPL:-}" ]; then
     pveam update
     pveam download "$TEMPLATE_STORE" "$(pveam available | awk '/debian-12-standard.*amd64/{print $2}' | tail -1)"
-    TMPL=$(pveam list "$TEMPLATE_STORE" | awk '/debian-12.*amd64/{print $1}' | tail -1)
+    TMPL=$(pveam list "$TEMPLATE_STORE" | awk '/debian-12.*amd64/{print $1}' | sort -V | tail -1)
   fi
   pct create "$VMID" "$TMPL" \
     --hostname "$HOSTNAME_" --cores "$CORES" --memory "$MEM_MB" \
@@ -135,15 +135,15 @@ Remaining manual steps:
        pct push $VMID homelab.yaml /etc/homelab-mcp/homelab.yaml
   2. Mint a Home Assistant long-lived token (HA -> profile -> Security) and set
      it in the container:
-       pct exec $VMID -- sed -i 's|^HA_TOKEN=.*|HA_TOKEN=<paste>|' /etc/homelab-mcp/homelab-mcp.env
+       # replace THE_TOKEN with the real token (no angle brackets, no quotes):
+       pct exec $VMID -- sed -i 's|^HA_TOKEN=.*|HA_TOKEN=THE_TOKEN|' /etc/homelab-mcp/homelab-mcp.env
   3. Authorize the printed SSH public key on the other hosts (HA, npm, omv,
      unifi, jellyfin, heimdall, changedetection, qbittorrent):
        ssh-copy-id -i /etc/homelab-mcp/id_ed25519.pub root@<host>
      (or append it to each host's ~/.ssh/authorized_keys)
-  4. Start / restart and check (the CLI needs the env file sourced; systemd
-     already does this for the running service):
+  4. Start / restart and check (the CLI auto-loads the env file):
        pct exec $VMID -- systemctl restart homelab-mcp
-       pct exec $VMID -- bash -lc 'set -a; . /etc/homelab-mcp/homelab-mcp.env; set +a; /opt/homelab-mcp/.venv/bin/homelab-mcp --check'
+       pct exec $VMID -- /opt/homelab-mcp/.venv/bin/homelab-mcp --check
        pct exec $VMID -- curl -s http://localhost:8787/health
   5. Add the mcp.fabrici.xyz proxy host in NPM -> forward to ${CT_IP}:8787
      (see deploy/nginx-proxy-manager.md)
