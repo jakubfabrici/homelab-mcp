@@ -37,6 +37,18 @@ Settings → Connectors → Add custom connector → Remote MCP:
 - URL: `https://mcp.fabrici.xyz/mcp`
 - Add header `Authorization: Bearer <MCP_AUTH_TOKEN>`
 
+
+## A note on `allowed_ips` and the Claude app
+
+If you add this server to the **Claude app** (claude.ai) as a remote connector,
+its requests originate from Anthropic's cloud, **not from your LAN**. So a
+LAN-only `server.allowed_ips` (e.g. `192.168.1.0/24`) will reject the Claude app
+with **HTTP 403**, even with the right token. For use from the Claude app
+anywhere, keep `allowed_ips: []` (empty) and rely on the bearer token (optionally
+add an HTTP Basic auth Access List at the reverse proxy as a second gate).
+`allowed_ips` is the right choice only when every client is on your LAN or a
+NetBird/VPN peer (e.g. Claude Code CLI running on such a machine).
+
 ## First calls
 
 Ask the assistant to run **`homelab_overview`** — it reports which backends are
