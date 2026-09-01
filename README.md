@@ -82,12 +82,18 @@ tools). That is powerful: the bearer token is effectively root on the whole
 network. Accordingly the server:
 
 - requires a bearer token on every request (`hmac.compare_digest`);
-- supports an IP allowlist, with `X-Forwarded-For` honoured only from trusted
-  proxies so it cannot be spoofed;
-- writes a redacted JSONL **audit log** of every state-changing call;
+- **fails closed**: refuses to start with neither a token nor an allowlist on a
+  non-loopback bind, unless `server.insecure: true` is set explicitly;
+- supports an IP allowlist; `X-Forwarded-For` is honoured only from trusted
+  proxies, and then the *right-most untrusted* hop is used, so the allowlist
+  cannot be spoofed by prepending a header (note: a LAN-only allowlist also
+  blocks the Claude app connector — see `docs/CLIENT.md`);
+- writes a redacted JSONL **audit log** (owner-only, `0600`) of every
+  state-changing call, and scrubs registered secrets from error messages too;
 - keeps timestamped backups when overwriting files;
-- can optionally refuse a small set of catastrophic commands
-  (`guard_destructive: true`) — off by default, per the chosen posture.
+- can optionally refuse a few catastrophic commands (`guard_destructive: true`,
+  off by default) — a **best-effort** fat-finger backstop, not a security
+  boundary: every configured client already holds full shell access.
 
 Secrets never go in git: `config/homelab.yaml`, `.env` and SSH keys are
 git-ignored, and config values can be pulled from environment variables.

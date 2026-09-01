@@ -35,11 +35,15 @@ def expand(value: Any) -> Any:
         def _sub(match: re.Match[str]) -> str:
             name, default = match.group(1), match.group(2)
             resolved = os.environ.get(name)
+            # ${VAR:-default} semantics: the default applies when VAR is unset
+            # OR set-but-empty (matching POSIX ':-'), not only when unset.
             if resolved is None:
                 if default is None:
                     raise ConfigError(
                         f"environment variable {name!r} referenced in config is not set"
                     )
+                resolved = default
+            elif resolved == "" and default is not None:
                 resolved = default
             return resolved
 
@@ -200,7 +204,12 @@ class ServerConfig:
     log_level: str = "INFO"
     max_output_bytes: int = 200_000
     guard_destructive: bool = False
-    """When true, a small set of obviously catastrophic commands is refused."""
+    """When true, a best-effort filter refuses a few obviously catastrophic
+    commands. This is a convenience backstop, NOT a security boundary — treat
+    every configured client as holding full shell access."""
+    insecure: bool = False
+    """Explicit opt-in to serve with neither auth_token nor allowed_ips on a
+    non-loopback bind. Without it the server refuses to start in that state."""
 
 
 @dataclass(slots=True)
@@ -220,17 +229,26 @@ class Config:
         cfg = cls(source=source)
 
         srv = data.get("server") or {}
+        auth_token = srv.get("auth_token", os.environ.get("MCP_AUTH_TOKEN", ""))
+        if not isinstance(auth_token, str):
+            # A bare YAML scalar like `auth_token: no` / `off` / `0` parses to a
+            # bool/int and would silently make `if token:` falsy, disabling auth.
+            raise ConfigError(
+                "server.auth_token must be a quoted string; got "
+                f"{type(auth_token).__name__} {auth_token!r} (quote it, e.g. \"no\")"
+            )
         cfg.server = ServerConfig(
             host=srv.get("host", os.environ.get("MCP_HOST", "0.0.0.0")),
             port=int(srv.get("port", os.environ.get("MCP_PORT", 8787))),
             path=srv.get("path", "/mcp"),
-            auth_token=srv.get("auth_token", os.environ.get("MCP_AUTH_TOKEN", "")),
+            auth_token=auth_token,
             allowed_ips=list(srv.get("allowed_ips") or []),
             trusted_proxies=list(srv.get("trusted_proxies") or []),
             audit_log=srv.get("audit_log", os.environ.get("MCP_AUDIT_LOG", "")),
             log_level=srv.get("log_level", os.environ.get("MCP_LOG_LEVEL", "INFO")),
             max_output_bytes=int(srv.get("max_output_bytes", 200_000)),
             guard_destructive=as_bool(srv.get("guard_destructive"), False),
+            insecure=as_bool(srv.get("insecure"), False),
         )
 
         pve = data.get("proxmox") or {}

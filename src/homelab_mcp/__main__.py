@@ -79,11 +79,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  proxmox:       {'yes' if config.proxmox.enabled else 'no'}")
         print(f"  homeassistant: {'yes' if config.homeassistant.enabled else 'no'}")
         print(f"  esphome:       {'yes' if config.esphome.enabled else 'no'}")
+        print(f"  fullykiosk:    {'yes' if config.fullykiosk.enabled else 'no'}")
         print(f"  ssh hosts:     {', '.join(config.ssh.hosts) or 'none'}")
         print(f"  net subnets:   {', '.join(config.network.subnets) or 'none'}")
         return 0
 
-    run(config)
+    try:
+        run(config)
+    except ConfigError as exc:
+        print(f"refusing to start: {exc}", file=sys.stderr)
+        return 2
     return 0
 
 

@@ -22,9 +22,12 @@ server:
     - 192.168.0.0/16
   audit_log: /var/log/homelab-mcp/audit.jsonl
   log_level: INFO
-  # Leave false for full access (your choice). Set true to refuse a tiny set of
+  # Best-effort fat-finger backstop (NOT a security boundary): refuse a few
   # obviously catastrophic shell commands (rm -rf /, mkfs, dd to a disk, ...).
   guard_destructive: false
+  # The server refuses to start with no auth_token AND no allowed_ips on a
+  # non-loopback bind. Set true only if a front proxy adds its own auth.
+  insecure: false
 
 proxmox:
   host: 192.168.1.10          # Proxmox node / cluster address

@@ -136,11 +136,14 @@ class ESPHomeClient:
         max_lines: int = 2000,
     ) -> dict[str, Any]:
         """Run ``validate``/``compile``/``upload``/``run`` and collect its output."""
-        self._ensure_configured()
         if action not in WS_ACTIONS:
             raise ToolError(
                 f"unsupported esphome action {action!r}; use one of {sorted(WS_ACTIONS)}"
             )
+        # Warm the HTTP client so a password-protected dashboard has been logged
+        # in and its session cookie exists before we open the websocket — even
+        # when a validate/flash is the very first ESPHome call in the process.
+        await self.client()
 
         url = self._ws_url(action)
         headers = {}

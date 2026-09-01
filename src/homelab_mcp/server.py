@@ -10,7 +10,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from .config import Config
+from .config import Config, ConfigError
 from .context import Homelab
 from .tools import MODULES
 
@@ -20,9 +20,11 @@ logger = logging.getLogger("homelab_mcp")
 class AuthMiddleware:
     """Bearer-token auth plus an optional IP allowlist, applied to /mcp.
 
-    The health endpoint stays open so a reverse proxy can probe it.  Client IPs
-    are taken from ``X-Forwarded-For`` only when the immediate peer is a
-    configured trusted proxy, so the allowlist cannot be spoofed by a header.
+    The health endpoint stays open so a reverse proxy can probe it.
+    ``X-Forwarded-For`` is honoured only when the immediate peer is a configured
+    trusted proxy, and then the *right-most untrusted* address is taken as the
+    client (never the left-most, attacker-controllable entry) so the allowlist
+    cannot be spoofed by prepending a header value.
     """
 
     def __init__(self, app: ASGIApp, config: Config) -> None:
@@ -37,10 +39,24 @@ class AuthMiddleware:
     def _client_ip(self, scope: Scope) -> str | None:
         peer = scope.get("client")
         peer_ip = peer[0] if peer else None
-        headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
-        forwarded = headers.get("x-forwarded-for")
-        if forwarded and peer_ip and self._is_trusted(peer_ip):
-            return forwarded.split(",")[0].strip()
+        # Only believe X-Forwarded-For when the immediate peer is a trusted proxy.
+        if not peer_ip or not self._is_trusted(peer_ip):
+            return peer_ip
+        # Gather every X-Forwarded-For value (a request may carry several such
+        # headers, delivered as separate ASGI tuples) preserving wire order,
+        # then take the RIGHT-most address that is not one of our own trusted
+        # proxies. The right-most untrusted hop is the real client; the
+        # left-most entries are attacker-controllable and must never be trusted.
+        forwarded_parts: list[str] = []
+        for key, value in scope.get("headers", []):
+            if key.decode().lower() == "x-forwarded-for":
+                forwarded_parts.extend(
+                    part.strip() for part in value.decode().split(",") if part.strip()
+                )
+        for candidate in reversed(forwarded_parts):
+            if not self._is_trusted(candidate):
+                return candidate
+        # No XFF, or every hop was a trusted proxy: fall back to the peer.
         return peer_ip
 
     def _is_trusted(self, ip: str) -> bool:
@@ -133,15 +149,47 @@ def build_server(config: Config) -> tuple[FastMCP, Homelab]:
     return mcp, lab
 
 
+def assert_safe_to_serve(config: Config) -> None:
+    """Fail closed: refuse to serve wide open on a non-loopback bind.
+
+    A server with neither a bearer token nor an IP allowlist, bound to a
+    non-loopback address, exposes root-equivalent tooling to anyone who can
+    reach it. Rather than only warn, refuse to start unless the operator has
+    explicitly opted in with ``server.insecure: true``.
+    """
+    host = (config.server.host or "").strip()
+    loopback = host in {"127.0.0.1", "::1", "localhost", ""}
+    if (
+        not config.server.auth_token
+        and not config.server.allowed_ips
+        and not loopback
+        and not config.server.insecure
+    ):
+        raise ConfigError(
+            "refusing to start: no server.auth_token and no server.allowed_ips on a "
+            f"non-loopback bind ({host}). This would expose Proxmox/SSH/Home Assistant "
+            "tools to anyone who can reach the port. Set server.auth_token (recommended), "
+            "or server.allowed_ips, or bind to 127.0.0.1 — or set server.insecure: true "
+            "to override this guard."
+        )
+
+
 def run(config: Config) -> None:
     logging.basicConfig(
         level=getattr(logging, config.server.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    # httpx/httpcore log every request URL at INFO; that URL can carry a secret
+    # in its query string (Fully Kiosk's Remote Admin password), so keep them quiet.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+    assert_safe_to_serve(config)
+
     if not config.server.auth_token:
         logger.warning(
-            "MCP_AUTH_TOKEN is empty: the server has NO authentication. "
-            "Only acceptable behind a proxy that adds its own auth."
+            "server.auth_token is empty: the server has NO bearer authentication. "
+            "Only acceptable behind a proxy that adds its own auth, or on loopback."
         )
 
     mcp, lab = build_server(config)

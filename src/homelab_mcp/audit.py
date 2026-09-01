@@ -19,8 +19,14 @@ _SECRET_VALUES: set[str] = set()
 
 
 def register_secret(value: str | None) -> None:
-    """Remember a secret so it is scrubbed from any logged payload."""
-    if value and len(value) >= 8:
+    """Remember a secret so it is scrubbed from any logged payload.
+
+    The floor is 4 characters: shorter than that risks over-redacting common
+    substrings, but device PINs / short Remote-Admin passwords (e.g. a 4-6 char
+    Fully Kiosk password) must still be covered — an 8-char floor silently
+    dropped them.
+    """
+    if value and len(value) >= 4:
         _SECRET_VALUES.add(value)
 
 
@@ -49,6 +55,12 @@ class AuditLog:
         self.path = Path(path) if path else None
         if self.path:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            # The trail records every target and action; keep it owner-only so a
+            # co-located user cannot read it (umask alone may leave it 0644).
+            try:
+                self.path.parent.chmod(0o700)
+            except OSError:  # pragma: no cover - not the owner / unusual FS
+                pass
 
     def record(self, event: str, **fields: Any) -> None:
         entry = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "event": event}
@@ -57,7 +69,11 @@ class AuditLog:
         logger.info("%s", line)
         if self.path:
             try:
-                with self.path.open("a", encoding="utf-8") as handle:
+                # os.open with 0o600 so a freshly-created log is owner-only.
+                fd = os.open(
+                    self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600
+                )
+                with os.fdopen(fd, "a", encoding="utf-8") as handle:
                     handle.write(line + "\n")
             except OSError as exc:  # pragma: no cover - disk problems only
                 logger.warning("audit log write failed: %s", exc)

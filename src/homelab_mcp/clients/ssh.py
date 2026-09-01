@@ -13,13 +13,27 @@ import asyncssh
 from ..config import SSHConfig, SSHHost
 from ..errors import NotConfigured, ToolError
 
-# Commands that wipe a machine beyond recovery.  Only consulted when
-# ``server.guard_destructive`` is enabled; the default configuration runs
-# without any command filtering at all.
+# Best-effort filter for a few obviously catastrophic commands. Only consulted
+# when ``server.guard_destructive`` is enabled (default off). This is NOT a
+# security boundary: free-form shell has unlimited ways to destroy a machine,
+# and any configured client already holds full shell access. It exists to catch
+# an accidental fat-finger, not a determined actor. The regexes also see the
+# outer wrapper of docker exec / pct exec commands, so a wrapped ``rm -rf /``
+# (quoted target) is matched too.
 _DESTRUCTIVE = (
-    re.compile(r"\brm\s+(-[a-zA-Z]*\s+)*-[a-zA-Z]*[rR][a-zA-Z]*f?[a-zA-Z]*\s+/(\s|$)"),
+    # rm with BOTH a recursive and a force flag, targeting the filesystem root
+    # ("/", "/*", or a quoted "/"), including when wrapped in sh -lc '...'.
+    re.compile(
+        r"""\brm\b
+            (?=[^\n;|&]*(?:\s-\w*r|\s--recursive))   # a recursive flag somewhere
+            (?=[^\n;|&]*(?:\s-\w*f|\s--force))        # a force flag somewhere
+            [^\n;|&]*\s["']?/(?:\*|\s|["']|$)         # target is / or /* (opt. quoted)
+        """,
+        re.IGNORECASE | re.VERBOSE,
+    ),
+    re.compile(r"\brm\b[^\n;|&]*--no-preserve-root", re.IGNORECASE),
     re.compile(r"\bmkfs(\.\w+)?\b"),
-    re.compile(r"\bdd\b[^|;]*\bof=/dev/(sd|nvme|vd|mmcblk)"),
+    re.compile(r"\bdd\b[^|;]*\bof=/dev/(sd|nvme|vd|mmcblk|disk|hd)", re.IGNORECASE),
     re.compile(r":\(\)\s*\{\s*:\|:&\s*\}\s*;:"),
     re.compile(r"\bwipefs\b"),
 )
@@ -153,5 +167,7 @@ class SSHManager:
 
     async def write_file(self, host_name: str, path: str, content: str) -> CommandResult:
         quoted = shlex.quote(path)
-        script = f"mkdir -p -- $(dirname {quoted}) && cat > {quoted}"
+        # Double-quote the command substitution so a directory containing a
+        # space or glob is passed to mkdir as a single argument, not word-split.
+        script = f'mkdir -p -- "$(dirname {quoted})" && cat > {quoted}'
         return await self.run(host_name, script, stdin=content, check=True)

@@ -146,3 +146,26 @@ def test_fullykiosk_devices_and_shared_password():
     assert cfg.fullykiosk.devices["tablet"].port == 2323
     assert cfg.fullykiosk.devices["kuchyna"].password == "own"
     assert cfg.fullykiosk.devices["kuchyna"].port == 2324
+
+
+def test_auth_token_must_be_string():
+    # `auth_token: no` parses to a bool in YAML and must be rejected, not
+    # silently coerced into a disabled-auth state.
+    with pytest.raises(ConfigError):
+        Config.from_dict({"server": {"auth_token": False}})
+    with pytest.raises(ConfigError):
+        Config.from_dict({"server": {"auth_token": 0}})
+    # a quoted string is fine
+    assert Config.from_dict({"server": {"auth_token": "no"}}).server.auth_token == "no"
+
+
+def test_expand_colon_dash_uses_default_for_empty(monkeypatch):
+    monkeypatch.setenv("EMPTY_VAR", "")
+    assert expand("${EMPTY_VAR:-fallback}") == "fallback"
+    monkeypatch.setenv("SET_VAR", "real")
+    assert expand("${SET_VAR:-fallback}") == "real"
+
+
+def test_insecure_flag_parsed():
+    assert Config.from_dict({"server": {"insecure": True}}).server.insecure is True
+    assert Config.from_dict({}).server.insecure is False
