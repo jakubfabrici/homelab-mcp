@@ -67,6 +67,9 @@ The intended target is a small LXC container on Proxmox. See
 snippets (nginx / Nginx Proxy Manager). [`docs/SETUP.md`](docs/SETUP.md) walks
 through provisioning the Proxmox API token, the Home Assistant token, the SSH
 key and the `mcp.fabrici.xyz` proxy entry end to end.
+[`docs/RESILIENCE.md`](docs/RESILIENCE.md) documents what the access path
+depends on, the safeguards on the container (protection flag, weekly vzdump)
+and how to rebuild or re-mint credentials from scratch.
 
 ## Connecting a client
 
