@@ -19,8 +19,8 @@ below happens inside that container unless noted.
 ```bash
 # inside the container, as root
 apt-get update && apt-get install -y git
-git clone -b claude/mcp-server-proxmox-e98e5k https://github.com/jakubfabrici/claudecode.git
-cd claudecode
+git clone https://github.com/jakubfabrici/homelab-mcp.git
+cd homelab-mcp
 bash deploy/install.sh
 ```
 

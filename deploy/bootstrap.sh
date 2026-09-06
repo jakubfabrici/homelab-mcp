@@ -6,8 +6,8 @@
 # service. Safe to re-run: existing pieces are detected and reused.
 #
 #   Usage (as root on pve):
-#     REPO_URL=https://github.com/jakubfabrici/claudecode.git \
-#     BRANCH=claude/mcp-server-proxmox-e98e5k \
+#     REPO_URL=https://github.com/jakubfabrici/homelab-mcp.git \
+#     BRANCH=main \
 #     bash bootstrap.sh
 #
 # What it does NOT do (do these yourself):
@@ -26,8 +26,8 @@ TEMPLATE_STORE="${TEMPLATE_STORE:-local}"
 DISK_GB="${DISK_GB:-8}"
 MEM_MB="${MEM_MB:-512}"
 CORES="${CORES:-1}"
-REPO_URL="${REPO_URL:-https://github.com/jakubfabrici/claudecode.git}"
-BRANCH="${BRANCH:-claude/mcp-server-proxmox-e98e5k}"
+REPO_URL="${REPO_URL:-https://github.com/jakubfabrici/homelab-mcp.git}"
+BRANCH="${BRANCH:-main}"
 PVE_HOST_IP="${PVE_HOST_IP:-192.168.1.200}"
 PVE_TOKEN_USER="${PVE_TOKEN_USER:-root@pam}"
 PVE_TOKEN_NAME="${PVE_TOKEN_NAME:-mcp-server}"

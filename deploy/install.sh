@@ -6,8 +6,8 @@ set -euo pipefail
 APP_DIR=/opt/homelab-mcp
 CFG_DIR=/etc/homelab-mcp
 LOG_DIR=/var/log/homelab-mcp
-REPO_URL="${REPO_URL:-https://github.com/jakubfabrici/claudecode.git}"
-BRANCH="${BRANCH:-claude/mcp-server-proxmox-e98e5k}"
+REPO_URL="${REPO_URL:-https://github.com/jakubfabrici/homelab-mcp.git}"
+BRANCH="${BRANCH:-main}"
 
 echo ">> installing system packages"
 apt-get update -qq
