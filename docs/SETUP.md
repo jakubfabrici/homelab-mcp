@@ -60,6 +60,50 @@ In Home Assistant: **Profile → Security → Long-lived access tokens → Creat
 Put the token in `HA_TOKEN=...` in the env file and set
 `homeassistant.url: https://ha.fabrici.xyz`.
 
+### When every `ha_*` tool starts returning 401
+
+Long-lived tokens never expire on their own — Home Assistant only sets an
+expiry on *normal* refresh tokens, so a working token stops working for exactly
+one reason: **its refresh token was deleted from the auth store**, usually by
+pruning old tokens in the profile page. The JWT is still well-formed, so the
+failure looks like a server problem rather than a revoked credential.
+
+Confirm it in one command (do not print the token itself):
+
+```bash
+# on the HA host — is the token's issuer still in the auth store?
+python3 -c "import base64,json,sys; print(json.loads(base64.urlsafe_b64decode(
+    sys.argv[1].split('.')[1] + '=='))['iss'])" "$HA_TOKEN"
+grep -c "<that id>" /config/.storage/auth      # 0 = deleted, reissue needed
+```
+
+Recovery: create a new token, put it in `HA_TOKEN=` and restart the service.
+
+```bash
+sed -i "s#^HA_TOKEN=.*#HA_TOKEN=${NEW}#" /etc/homelab-mcp/homelab-mcp.env
+systemctl restart homelab-mcp
+```
+
+Two things worth knowing when the MCP server is how you normally reach the
+house:
+
+- **Restart it detached**, or the restart kills the very SSH call that is
+  issuing it: `nohup sh -c "sleep 4; systemctl restart homelab-mcp" &`.
+- **There is a token-free break-glass path** into the Core API from any add-on
+  that declares `homeassistant_api: true` (e.g. the SSH add-on). The token is
+  regenerated on every add-on start, so dereference it in the container and
+  never copy it out:
+
+  ```bash
+  docker exec app_a0d7b954_ssh sh -c \
+    'curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/api/'
+  ```
+
+  Useful for `automation.reload` and state reads while the user token is dead.
+
+Give each consumer its own token (MCP server, kiosk pages, scripts) so that
+revoking one does not take the others down with it.
+
 ## 4. ESPHome
 
 - If the **ESPHome dashboard** add-on is reachable (e.g.
