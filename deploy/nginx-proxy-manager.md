@@ -1,5 +1,10 @@
 # Nginx Proxy Manager (NPM) setup for mcp.fabrici.xyz
 
+> **Historical.** NPM (LXC 104) was retired in September 2026 and the
+> Traefik + NetBird proxy that followed it on 2026-10-01. The live edge proxy
+> is **Caddy on LXC 116** (`192.168.1.213`), see [`caddy/`](caddy/). Keep this
+> page only as a reference for an NPM-based setup.
+
 Your NPM runs on LXC 104 (`192.168.1.213`) and already terminates every
 `*.fabrici.xyz` host, so add the MCP endpoint the same way.
 

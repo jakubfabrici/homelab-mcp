@@ -30,7 +30,7 @@ gives a live inventory of each.
 Claude app / Claude Code
         │  HTTPS + Bearer token
         ▼
-  mcp.fabrici.xyz   (your reverse proxy: nginx / NPM / Traefik)
+  mcp.fabrici.xyz   (edge reverse proxy: Caddy on LXC 116, see homelab/caddy/)
         │  http://127.0.0.1:8787/mcp
         ▼
    homelab-mcp   ──► Proxmox API (token)
@@ -42,6 +42,50 @@ Claude app / Claude Code
 The server speaks **streamable HTTP MCP** and enforces a bearer token (and an
 optional IP allowlist) itself, so it is safe to expose behind your existing
 reverse proxy alongside `ha.fabrici.xyz`.
+
+## Metrics
+
+The server exposes Prometheus metrics at `GET /metrics` (own registry, plus
+the standard `process_*` / `python_*` collectors):
+
+| metric | labels | meaning |
+|---|---|---|
+| `homelab_mcp_info` | `version` | build info, always 1 |
+| `homelab_mcp_module_enabled` | `module` | 1 when proxmox / homeassistant / esphome / fullykiosk / ssh is configured |
+| `homelab_mcp_tool_calls_total` | `tool`, `outcome` | tool invocations, `outcome` is `ok` or `error` |
+| `homelab_mcp_tool_duration_seconds` | `tool` | histogram of tool wall-clock time |
+| `homelab_mcp_tool_in_flight` | `tool` | tools currently running |
+| `homelab_mcp_http_requests_total` | `method`, `path`, `status` | HTTP requests; `path` is normalised to `/mcp`, `/health`, `/metrics` or `other` |
+| `homelab_mcp_auth_rejections_total` | `reason` | requests refused by the auth middleware (`ip`, `token`, `metrics`) |
+| `homelab_mcp_audit_events_total` | `event` | audit-log events (every state-changing tool records one) |
+
+Labels only ever carry names the server defines (registered tool names,
+route names); tool arguments, hosts and commands never appear in metrics.
+
+`/metrics` is **not** open: a scraper gets in when its IP is listed in
+`server.metrics_allowed_ips`, or when it sends `Authorization: Bearer
+<server.metrics_token>` (a dedicated read-only token, so Prometheus never
+holds the master `auth_token`). The master token works there too.
+
+```yaml
+server:
+  metrics_allowed_ips: ["192.168.1.230/32"]   # the Prometheus host
+  metrics_token: ${MCP_METRICS_TOKEN:-}       # optional alternative
+```
+
+Prometheus scrape config (IP allowlist variant):
+
+```yaml
+- job_name: homelab-mcp
+  static_configs:
+    - targets: ["192.168.1.250:8787"]
+```
+
+The full homelab monitoring stack (Prometheus, Alertmanager, Grafana,
+exporters for Proxmox, Home Assistant, every host) lives in
+[`monitoring/`](https://github.com/jakubfabrici/homelab/tree/main/monitoring) in the
+`homelab` repository and is documented in
+[`docs/MONITORING.md`](https://github.com/jakubfabrici/homelab/blob/main/docs/MONITORING.md) there.
 
 ## Quick start
 
@@ -63,8 +107,10 @@ are not configured instead of failing the whole server.
 ## Deployment
 
 The intended target is a small LXC container on Proxmox. See
-[`deploy/`](deploy/) for a systemd unit, an install script and reverse-proxy
-snippets (nginx / Nginx Proxy Manager). [`docs/SETUP.md`](docs/SETUP.md) walks
+[`deploy/`](deploy/) for a systemd unit, an install script and the edge
+reverse proxy ([`caddy/`](https://github.com/jakubfabrici/homelab/tree/main/caddy) in the `homelab` repository — Caddy, which serves every
+`*.fabrici.xyz` host; the older nginx / Nginx Proxy Manager snippets are kept
+for reference). [`docs/SETUP.md`](docs/SETUP.md) walks
 through provisioning the Proxmox API token, the Home Assistant token, the SSH
 key and the `mcp.fabrici.xyz` proxy entry end to end.
 [`docs/RESILIENCE.md`](docs/RESILIENCE.md) documents what the access path

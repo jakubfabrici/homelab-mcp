@@ -11,7 +11,7 @@ BRANCH="${BRANCH:-main}"
 
 echo ">> installing system packages"
 apt-get update -qq
-apt-get install -y -qq python3 python3-venv python3-pip git curl openssh-client iputils-ping iproute2
+apt-get install -y -qq python3 python3-venv python3-pip git curl openssh-client iputils-ping iproute2 procps
 
 echo ">> creating service user and directories"
 id homelab-mcp &>/dev/null || useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin homelab-mcp
@@ -58,6 +58,23 @@ echo ">> ssh key for reaching homelab hosts"
 
 chown -R homelab-mcp:homelab-mcp "$APP_DIR" "$CFG_DIR" "$LOG_DIR"
 chmod 600 "$CFG_DIR/homelab-mcp.env" "$CFG_DIR/id_ed25519"
+
+echo ">> allowing the service group to ping (unprivileged ICMP sockets)"
+# The unit runs with NoNewPrivileges=, which ignores ping's cap_net_raw file
+# capability. Listing the service group in net.ipv4.ping_group_range lets ping
+# use an ICMP datagram socket instead, without granting the process CAP_NET_RAW.
+MCP_GID=$(getent group homelab-mcp | cut -d: -f3)
+mkdir -p /etc/sysctl.d
+cat > /etc/sysctl.d/60-homelab-mcp.conf <<SYSCTL
+# Let the homelab-mcp service user ping without CAP_NET_RAW (net_ping tool).
+net.ipv4.ping_group_range = $MCP_GID $MCP_GID
+SYSCTL
+if ! sysctl -q -p /etc/sysctl.d/60-homelab-mcp.conf 2>/dev/null \
+   && ! echo "$MCP_GID $MCP_GID" > /proc/sys/net/ipv4/ping_group_range 2>/dev/null; then
+  echo "   WARNING: could not set net.ipv4.ping_group_range in this container." >&2
+  echo "   net_ping will fail until you either make /proc/sys/net writable or" >&2
+  echo "   uncomment AmbientCapabilities=CAP_NET_RAW in the systemd unit." >&2
+fi
 
 echo ">> installing systemd unit"
 cp "$APP_DIR/deploy/homelab-mcp.service" /etc/systemd/system/homelab-mcp.service

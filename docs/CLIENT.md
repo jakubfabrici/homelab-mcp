@@ -47,7 +47,7 @@ with **HTTP 403**, even with the right token. For use from the Claude app
 anywhere, keep `allowed_ips: []` (empty) and rely on the bearer token (optionally
 add an HTTP Basic auth Access List at the reverse proxy as a second gate).
 `allowed_ips` is the right choice only when every client is on your LAN or a
-NetBird/VPN peer (e.g. Claude Code CLI running on such a machine).
+WireGuard (wg-easy) VPN client (e.g. Claude Code CLI running on such a machine).
 
 ## First calls
 

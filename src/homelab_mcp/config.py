@@ -210,6 +210,11 @@ class ServerConfig:
     insecure: bool = False
     """Explicit opt-in to serve with neither auth_token nor allowed_ips on a
     non-loopback bind. Without it the server refuses to start in that state."""
+    metrics_allowed_ips: list[str] = field(default_factory=list)
+    """IPs/CIDRs allowed to GET /metrics without a token (the Prometheus host)."""
+    metrics_token: str = ""
+    """Optional dedicated bearer token for /metrics so a scraper never needs the
+    master auth_token. The master token is always accepted there as well."""
 
 
 @dataclass(slots=True)
@@ -237,6 +242,12 @@ class Config:
                 "server.auth_token must be a quoted string; got "
                 f"{type(auth_token).__name__} {auth_token!r} (quote it, e.g. \"no\")"
             )
+        metrics_token = srv.get("metrics_token", os.environ.get("MCP_METRICS_TOKEN", ""))
+        if not isinstance(metrics_token, str):
+            raise ConfigError(
+                "server.metrics_token must be a quoted string; got "
+                f"{type(metrics_token).__name__} {metrics_token!r}"
+            )
         cfg.server = ServerConfig(
             host=srv.get("host", os.environ.get("MCP_HOST", "0.0.0.0")),
             port=int(srv.get("port", os.environ.get("MCP_PORT", 8787))),
@@ -249,6 +260,8 @@ class Config:
             max_output_bytes=int(srv.get("max_output_bytes", 200_000)),
             guard_destructive=as_bool(srv.get("guard_destructive"), False),
             insecure=as_bool(srv.get("insecure"), False),
+            metrics_allowed_ips=list(srv.get("metrics_allowed_ips") or []),
+            metrics_token=metrics_token,
         )
 
         pve = data.get("proxmox") or {}

@@ -28,6 +28,13 @@ The installer creates a `homelab-mcp` service user, a virtualenv in
 `/opt/homelab-mcp`, config in `/etc/homelab-mcp/`, a fresh `MCP_AUTH_TOKEN`, and
 an SSH keypair at `/etc/homelab-mcp/id_ed25519`.
 
+It also writes `/etc/sysctl.d/60-homelab-mcp.conf`, which lists the
+`homelab-mcp` group in `net.ipv4.ping_group_range`. The systemd unit runs with
+`NoNewPrivileges=`, which disables the `cap_net_raw` file capability on
+`/usr/bin/ping`, so the `net_ping` tool depends on this sysctl to open an
+unprivileged ICMP socket instead. See [Troubleshooting](#troubleshooting) if
+`net_ping` reports that it cannot open a socket.
+
 ## 2. Proxmox API token
 
 In the Proxmox web UI:
@@ -52,6 +59,50 @@ node and runs `pct exec`, so add the node under `ssh.hosts` and set
 In Home Assistant: **Profile → Security → Long-lived access tokens → Create**.
 Put the token in `HA_TOKEN=...` in the env file and set
 `homeassistant.url: https://ha.fabrici.xyz`.
+
+### When every `ha_*` tool starts returning 401
+
+Long-lived tokens never expire on their own — Home Assistant only sets an
+expiry on *normal* refresh tokens, so a working token stops working for exactly
+one reason: **its refresh token was deleted from the auth store**, usually by
+pruning old tokens in the profile page. The JWT is still well-formed, so the
+failure looks like a server problem rather than a revoked credential.
+
+Confirm it in one command (do not print the token itself):
+
+```bash
+# on the HA host — is the token's issuer still in the auth store?
+python3 -c "import base64,json,sys; print(json.loads(base64.urlsafe_b64decode(
+    sys.argv[1].split('.')[1] + '=='))['iss'])" "$HA_TOKEN"
+grep -c "<that id>" /config/.storage/auth      # 0 = deleted, reissue needed
+```
+
+Recovery: create a new token, put it in `HA_TOKEN=` and restart the service.
+
+```bash
+sed -i "s#^HA_TOKEN=.*#HA_TOKEN=${NEW}#" /etc/homelab-mcp/homelab-mcp.env
+systemctl restart homelab-mcp
+```
+
+Two things worth knowing when the MCP server is how you normally reach the
+house:
+
+- **Restart it detached**, or the restart kills the very SSH call that is
+  issuing it: `nohup sh -c "sleep 4; systemctl restart homelab-mcp" &`.
+- **There is a token-free break-glass path** into the Core API from any add-on
+  that declares `homeassistant_api: true` (e.g. the SSH add-on). The token is
+  regenerated on every add-on start, so dereference it in the container and
+  never copy it out:
+
+  ```bash
+  docker exec app_a0d7b954_ssh sh -c \
+    'curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/api/'
+  ```
+
+  Useful for `automation.reload` and state reads while the user token is dead.
+
+Give each consumer its own token (MCP server, kiosk pages, scripts) so that
+revoking one does not take the others down with it.
 
 ## 4. ESPHome
 
@@ -92,12 +143,32 @@ curl -s http://localhost:8787/health          # -> ok
 
 ## 7. Expose via mcp.fabrici.xyz
 
-Add a reverse-proxy entry next to your existing `ha.fabrici.xyz`:
+The edge proxy for every `*.fabrici.xyz` host is **Caddy on LXC 116**
+(`192.168.1.213`), see [`caddy/`](https://github.com/jakubfabrici/homelab/tree/main/caddy) in the `homelab` repository. `mcp.fabrici.xyz`
+is already in its `Caddyfile` (`handle @mcp` → `192.168.1.250:8787`); if the
+MCP container gets another IP, change that line and `systemctl reload caddy`.
+No DNS or certificate work is needed: the wildcard certificate covers it.
 
-- nginx: see [`deploy/nginx.conf`](../deploy/nginx.conf)
-- Nginx Proxy Manager: see [`deploy/nginx-proxy-manager.md`](../deploy/nginx-proxy-manager.md)
+Generic snippets for other setups: nginx [`deploy/nginx.conf`](../deploy/nginx.conf),
+Nginx Proxy Manager [`deploy/nginx-proxy-manager.md`](../deploy/nginx-proxy-manager.md)
+(historical, NPM is retired).
 
-Point it at `http://192.168.1.40:8787`. Get a TLS cert for `mcp.fabrici.xyz`.
+## 7b. Prometheus metrics (optional)
+
+The server serves `GET /metrics` for Prometheus. Allow your Prometheus host
+in `/etc/homelab-mcp/homelab.yaml` and restart the service:
+
+```yaml
+server:
+  metrics_allowed_ips: ["192.168.1.230/32"]   # the monitoring LXC
+  # or hand Prometheus a dedicated read-only token instead of an IP:
+  # metrics_token: ${MCP_METRICS_TOKEN}
+```
+
+Check with `curl http://<mcp-ip>:8787/metrics` from the allowed host (anything
+else gets 403). The complete monitoring stack is in the `homelab` repository
+(`monitoring/`, https://github.com/jakubfabrici/homelab) and
+described in [`MONITORING.md`](MONITORING.md).
 
 ## 8. Connect the client
 
@@ -109,3 +180,28 @@ See [`CLIENT.md`](CLIENT.md).
 cd /opt/homelab-mcp && git pull && .venv/bin/pip install -e . && systemctl restart homelab-mcp
 ```
 (or re-run `deploy/install.sh`).
+
+## Troubleshooting
+
+### `net_ping` fails with "socket: Operation not permitted"
+
+The service user has no raw-socket capability (the unit's `NoNewPrivileges=`
+ignores ping's file capabilities), and the kernel is not allowing it an
+unprivileged ICMP socket either. Check and fix the sysctl the installer sets:
+
+```bash
+cat /proc/sys/net/ipv4/ping_group_range        # "1 0" means nobody may ping
+getent group homelab-mcp | cut -d: -f3          # the service group id
+sysctl -p /etc/sysctl.d/60-homelab-mcp.conf     # re-apply (re-run install.sh to recreate)
+sudo -u homelab-mcp ping -c 1 192.168.1.1       # should print RTTs now
+```
+
+If `/proc/sys/net/ipv4/ping_group_range` is read-only in your container, the
+fallback is to grant the unit `CAP_NET_RAW` instead: uncomment the
+`AmbientCapabilities=CAP_NET_RAW` and `CapabilityBoundingSet=CAP_NET_RAW` lines
+in `/etc/systemd/system/homelab-mcp.service`, then
+`systemctl daemon-reload && systemctl restart homelab-mcp`. Ambient
+capabilities are inherited across `execve` even with `NoNewPrivileges=`, so
+`ping` gets the capability; the trade-off is that the whole server process
+holds it too. Either way, `net_ping ... via_host=<ssh host>` pings from another
+machine and needs neither.

@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,9 @@ class AuditLog:
 
     def __init__(self, path: str | os.PathLike[str] | None = None) -> None:
         self.path = Path(path) if path else None
+        # Called with the event name after every record(); used for metrics.
+        # Listeners only ever see the event name, never the (redacted) fields.
+        self.listeners: list[Callable[[str], None]] = []
         if self.path:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             # The trail records every target and action; keep it owner-only so a
@@ -77,3 +81,8 @@ class AuditLog:
                     handle.write(line + "\n")
             except OSError as exc:  # pragma: no cover - disk problems only
                 logger.warning("audit log write failed: %s", exc)
+        for listener in self.listeners:
+            try:
+                listener(event)
+            except Exception as exc:  # pragma: no cover - a listener must never break a tool
+                logger.debug("audit listener failed: %s", exc)
