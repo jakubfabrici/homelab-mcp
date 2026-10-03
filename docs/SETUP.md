@@ -143,12 +143,15 @@ curl -s http://localhost:8787/health          # -> ok
 
 ## 7. Expose via mcp.fabrici.xyz
 
-Add a reverse-proxy entry next to your existing `ha.fabrici.xyz`:
+The edge proxy for every `*.fabrici.xyz` host is **Caddy on LXC 116**
+(`192.168.1.213`), see [`caddy/`](https://github.com/jakubfabrici/homelab/tree/main/caddy) in the `homelab` repository. `mcp.fabrici.xyz`
+is already in its `Caddyfile` (`handle @mcp` → `192.168.1.250:8787`); if the
+MCP container gets another IP, change that line and `systemctl reload caddy`.
+No DNS or certificate work is needed: the wildcard certificate covers it.
 
-- nginx: see [`deploy/nginx.conf`](../deploy/nginx.conf)
-- Nginx Proxy Manager: see [`deploy/nginx-proxy-manager.md`](../deploy/nginx-proxy-manager.md)
-
-Point it at `http://192.168.1.40:8787`. Get a TLS cert for `mcp.fabrici.xyz`.
+Generic snippets for other setups: nginx [`deploy/nginx.conf`](../deploy/nginx.conf),
+Nginx Proxy Manager [`deploy/nginx-proxy-manager.md`](../deploy/nginx-proxy-manager.md)
+(historical, NPM is retired).
 
 ## 7b. Prometheus metrics (optional)
 

@@ -12,7 +12,7 @@
 #
 # What it does NOT do (do these yourself):
 #   * mint the Home Assistant long-lived token (browser) -> paste into the env
-#   * create the mcp.fabrici.xyz proxy host in Nginx Proxy Manager (GUI)
+#   * add mcp.fabrici.xyz to the Caddy edge proxy (homelab repo: caddy/Caddyfile, live on LXC 116)
 set -euo pipefail
 
 # ---- tunables --------------------------------------------------------------
@@ -137,7 +137,7 @@ Remaining manual steps:
      it in the container:
        # replace THE_TOKEN with the real token (no angle brackets, no quotes):
        pct exec $VMID -- sed -i 's|^HA_TOKEN=.*|HA_TOKEN=THE_TOKEN|' /etc/homelab-mcp/homelab-mcp.env
-  3. Authorize the printed SSH public key on the other hosts (HA, npm, omv,
+  3. Authorize the printed SSH public key on the other hosts (HA, caddy, omv,
      unifi, jellyfin, heimdall, changedetection, qbittorrent):
        ssh-copy-id -i /etc/homelab-mcp/id_ed25519.pub root@<host>
      (or append it to each host's ~/.ssh/authorized_keys)
@@ -145,8 +145,8 @@ Remaining manual steps:
        pct exec $VMID -- systemctl restart homelab-mcp
        pct exec $VMID -- /opt/homelab-mcp/.venv/bin/homelab-mcp --check
        pct exec $VMID -- curl -s http://localhost:8787/health
-  5. Add the mcp.fabrici.xyz proxy host in NPM -> forward to ${CT_IP}:8787
-     (see deploy/nginx-proxy-manager.md)
+  5. Make sure the Caddy edge proxy forwards mcp.fabrici.xyz to ${CT_IP}:8787
+     (handle @mcp in the homelab repo caddy/Caddyfile, live on LXC 116; then systemctl reload caddy)
 
 Your MCP bearer token (needed by the client):
   pct exec $VMID -- grep MCP_AUTH_TOKEN /etc/homelab-mcp/homelab-mcp.env

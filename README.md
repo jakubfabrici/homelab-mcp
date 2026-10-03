@@ -30,7 +30,7 @@ gives a live inventory of each.
 Claude app / Claude Code
         │  HTTPS + Bearer token
         ▼
-  mcp.fabrici.xyz   (your reverse proxy: nginx / NPM / Traefik)
+  mcp.fabrici.xyz   (edge reverse proxy: Caddy on LXC 116, see homelab/caddy/)
         │  http://127.0.0.1:8787/mcp
         ▼
    homelab-mcp   ──► Proxmox API (token)
@@ -107,8 +107,10 @@ are not configured instead of failing the whole server.
 ## Deployment
 
 The intended target is a small LXC container on Proxmox. See
-[`deploy/`](deploy/) for a systemd unit, an install script and reverse-proxy
-snippets (nginx / Nginx Proxy Manager). [`docs/SETUP.md`](docs/SETUP.md) walks
+[`deploy/`](deploy/) for a systemd unit, an install script and the edge
+reverse proxy ([`caddy/`](https://github.com/jakubfabrici/homelab/tree/main/caddy) in the `homelab` repository — Caddy, which serves every
+`*.fabrici.xyz` host; the older nginx / Nginx Proxy Manager snippets are kept
+for reference). [`docs/SETUP.md`](docs/SETUP.md) walks
 through provisioning the Proxmox API token, the Home Assistant token, the SSH
 key and the `mcp.fabrici.xyz` proxy entry end to end.
 [`docs/RESILIENCE.md`](docs/RESILIENCE.md) documents what the access path
