@@ -15,6 +15,15 @@ Restart=on-failure
 RestartSec=3
 
 # Hardening (the process still needs outbound network + its SSH key).
+# NoNewPrivileges= also disables file capabilities, so /usr/bin/ping's
+# cap_net_raw+ep is ignored under this unit. net_ping relies instead on the
+# unprivileged ICMP datagram socket, which the kernel allows for groups listed in
+# net.ipv4.ping_group_range; deploy/install.sh adds the homelab-mcp group there
+# (/etc/sysctl.d/60-homelab-mcp.conf). That grants this process no capability
+# at all. If that sysctl cannot be set in your container, the fallback is to
+# hand the unit CAP_NET_RAW (ambient caps survive NoNewPrivileges=):
+#AmbientCapabilities=CAP_NET_RAW
+#CapabilityBoundingSet=CAP_NET_RAW
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

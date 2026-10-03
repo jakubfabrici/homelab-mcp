@@ -28,6 +28,13 @@ The installer creates a `homelab-mcp` service user, a virtualenv in
 `/opt/homelab-mcp`, config in `/etc/homelab-mcp/`, a fresh `MCP_AUTH_TOKEN`, and
 an SSH keypair at `/etc/homelab-mcp/id_ed25519`.
 
+It also writes `/etc/sysctl.d/60-homelab-mcp.conf`, which lists the
+`homelab-mcp` group in `net.ipv4.ping_group_range`. The systemd unit runs with
+`NoNewPrivileges=`, which disables the `cap_net_raw` file capability on
+`/usr/bin/ping`, so the `net_ping` tool depends on this sysctl to open an
+unprivileged ICMP socket instead. See [Troubleshooting](#troubleshooting) if
+`net_ping` reports that it cannot open a socket.
+
 ## 2. Proxmox API token
 
 In the Proxmox web UI:
@@ -109,3 +116,28 @@ See [`CLIENT.md`](CLIENT.md).
 cd /opt/homelab-mcp && git pull && .venv/bin/pip install -e . && systemctl restart homelab-mcp
 ```
 (or re-run `deploy/install.sh`).
+
+## Troubleshooting
+
+### `net_ping` fails with "socket: Operation not permitted"
+
+The service user has no raw-socket capability (the unit's `NoNewPrivileges=`
+ignores ping's file capabilities), and the kernel is not allowing it an
+unprivileged ICMP socket either. Check and fix the sysctl the installer sets:
+
+```bash
+cat /proc/sys/net/ipv4/ping_group_range        # "1 0" means nobody may ping
+getent group homelab-mcp | cut -d: -f3          # the service group id
+sysctl -p /etc/sysctl.d/60-homelab-mcp.conf     # re-apply (re-run install.sh to recreate)
+sudo -u homelab-mcp ping -c 1 192.168.1.1       # should print RTTs now
+```
+
+If `/proc/sys/net/ipv4/ping_group_range` is read-only in your container, the
+fallback is to grant the unit `CAP_NET_RAW` instead: uncomment the
+`AmbientCapabilities=CAP_NET_RAW` and `CapabilityBoundingSet=CAP_NET_RAW` lines
+in `/etc/systemd/system/homelab-mcp.service`, then
+`systemctl daemon-reload && systemctl restart homelab-mcp`. Ambient
+capabilities are inherited across `execve` even with `NoNewPrivileges=`, so
+`ping` gets the capability; the trade-off is that the whole server process
+holds it too. Either way, `net_ping ... via_host=<ssh host>` pings from another
+machine and needs neither.
