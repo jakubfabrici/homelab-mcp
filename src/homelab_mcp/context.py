@@ -33,6 +33,7 @@ class Homelab:
             config.esphome.token,
             config.esphome.password,
             config.server.auth_token,
+            config.server.metrics_token,
         ):
             register_secret(secret)
         for host in config.ssh.hosts.values():

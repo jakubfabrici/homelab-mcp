@@ -106,6 +106,23 @@ Add a reverse-proxy entry next to your existing `ha.fabrici.xyz`:
 
 Point it at `http://192.168.1.40:8787`. Get a TLS cert for `mcp.fabrici.xyz`.
 
+## 7b. Prometheus metrics (optional)
+
+The server serves `GET /metrics` for Prometheus. Allow your Prometheus host
+in `/etc/homelab-mcp/homelab.yaml` and restart the service:
+
+```yaml
+server:
+  metrics_allowed_ips: ["192.168.1.230/32"]   # the monitoring LXC
+  # or hand Prometheus a dedicated read-only token instead of an IP:
+  # metrics_token: ${MCP_METRICS_TOKEN}
+```
+
+Check with `curl http://<mcp-ip>:8787/metrics` from the allowed host (anything
+else gets 403). The complete monitoring stack is in the `homelab` repository
+(`monitoring/`, https://github.com/jakubfabrici/homelab) and
+described in [`MONITORING.md`](MONITORING.md).
+
 ## 8. Connect the client
 
 See [`CLIENT.md`](CLIENT.md).

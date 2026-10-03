@@ -4,37 +4,45 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+from collections.abc import Iterable
 
-from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
-from starlette.responses import JSONResponse, PlainTextResponse
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.responses import JSONResponse, PlainTextResponse, Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .config import Config, ConfigError
 from .context import Homelab
+from .metrics import HEALTH_PATH, METRICS_PATH, InstrumentedFastMCP, Metrics
 from .tools import MODULES
 
 logger = logging.getLogger("homelab_mcp")
+
+_OPEN_PATHS = frozenset({HEALTH_PATH, "/healthz"})
 
 
 class AuthMiddleware:
     """Bearer-token auth plus an optional IP allowlist, applied to /mcp.
 
     The health endpoint stays open so a reverse proxy can probe it.
+    ``/metrics`` has its own, narrower gate: a scraper IP allowlist
+    (``server.metrics_allowed_ips``), a dedicated read-only bearer token
+    (``server.metrics_token``) or the master token. Nothing else ever reaches
+    it, so the operational counters cannot be read by an anonymous client.
     ``X-Forwarded-For`` is honoured only when the immediate peer is a configured
     trusted proxy, and then the *right-most untrusted* address is taken as the
     client (never the left-most, attacker-controllable entry) so the allowlist
     cannot be spoofed by prepending a header value.
     """
 
-    def __init__(self, app: ASGIApp, config: Config) -> None:
+    def __init__(self, app: ASGIApp, config: Config, metrics: Metrics | None = None) -> None:
         self.app = app
+        self.metrics = metrics
         self.token = config.server.auth_token
+        self.metrics_token = config.server.metrics_token
         self.path = config.server.path
-        self.allowed = [ipaddress.ip_network(c, strict=False) for c in config.server.allowed_ips]
-        self.trusted = [
-            ipaddress.ip_network(c, strict=False) for c in config.server.trusted_proxies
-        ]
+        self.allowed = _networks(config.server.allowed_ips)
+        self.metrics_allowed = _networks(config.server.metrics_allowed_ips)
+        self.trusted = _networks(config.server.trusted_proxies)
 
     def _client_ip(self, scope: Scope) -> str | None:
         peer = scope.get("client")
@@ -60,22 +68,47 @@ class AuthMiddleware:
         return peer_ip
 
     def _is_trusted(self, ip: str) -> bool:
-        try:
-            addr = ipaddress.ip_address(ip)
-        except ValueError:
-            return False
-        return any(addr in network for network in self.trusted)
+        return _in_networks(ip, self.trusted)
 
     def _ip_allowed(self, ip: str | None) -> bool:
         if not self.allowed:
             return True
-        if ip is None:
-            return False
-        try:
-            addr = ipaddress.ip_address(ip)
-        except ValueError:
-            return False
-        return any(addr in network for network in self.allowed)
+        return ip is not None and _in_networks(ip, self.allowed)
+
+    def _metrics_authorised(self, ip: str | None, provided: str) -> bool:
+        """A scraper is let in by IP allowlist, by the metrics token or the master token.
+
+        With none of the three configured the endpoint is closed (403), never open.
+        """
+        if ip is not None and _in_networks(ip, self.metrics_allowed):
+            return True
+        if self.metrics_token and _secure_eq(provided, f"Bearer {self.metrics_token}"):
+            return True
+        return bool(self.token) and _secure_eq(provided, f"Bearer {self.token}")
+
+    @staticmethod
+    def _bearer(scope: Scope) -> str:
+        for key, value in scope.get("headers", []):
+            if key.decode().lower() == "authorization":
+                return value.decode()
+        return ""
+
+    def _reject(self, reason: str, path: str, client_ip: str | None) -> None:
+        logger.warning("rejected %s from %s: %s", path, client_ip, reason)
+        if self.metrics is not None:
+            self.metrics.record_rejection(reason)
+
+    def _counting_send(self, send: Send, method: str, path: str) -> Send:
+        metrics = self.metrics
+        if metrics is None:
+            return send
+
+        async def wrapped(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                metrics.record_http(method, path, int(message.get("status", 0)))
+            await send(message)
+
+        return wrapped
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -83,23 +116,33 @@ class AuthMiddleware:
             return
 
         path = scope.get("path", "")
-        if path.rstrip("/") in {"/health", "/healthz"} or path == "/":
+        send = self._counting_send(send, scope.get("method", ""), path)
+        normalised = path.rstrip("/")
+        if normalised in _OPEN_PATHS or path == "/":
             await self.app(scope, receive, send)
             return
 
         client_ip = self._client_ip(scope)
+        provided = self._bearer(scope)
+
+        if normalised == METRICS_PATH:
+            if self._metrics_authorised(client_ip, provided):
+                await self.app(scope, receive, send)
+            else:
+                self._reject("metrics", path, client_ip)
+                await JSONResponse({"error": "forbidden"}, status_code=403)(scope, receive, send)
+            return
+
         if not self._ip_allowed(client_ip):
-            logger.warning("rejected %s from disallowed ip %s", path, client_ip)
+            self._reject("ip", path, client_ip)
             await JSONResponse({"error": "forbidden"}, status_code=403)(scope, receive, send)
             return
 
         if self.token:
-            headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
-            provided = headers.get("authorization", "")
             expected = f"Bearer {self.token}"
             # constant-time-ish comparison
             if not _secure_eq(provided, expected):
-                logger.warning("rejected %s from %s: bad token", path, client_ip)
+                self._reject("token", path, client_ip)
                 await JSONResponse({"error": "unauthorized"}, status_code=401)(
                     scope, receive, send
                 )
@@ -108,14 +151,27 @@ class AuthMiddleware:
         await self.app(scope, receive, send)
 
 
+def _networks(cidrs: Iterable[str]) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    return [ipaddress.ip_network(c, strict=False) for c in cidrs]
+
+
+def _in_networks(ip: str, networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network]) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in network for network in networks)
+
+
 def _secure_eq(a: str, b: str) -> bool:
     import hmac
 
     return hmac.compare_digest(a.encode(), b.encode())
 
 
-def build_server(config: Config) -> tuple[FastMCP, Homelab]:
+def build_server(config: Config) -> tuple[InstrumentedFastMCP, Homelab]:
     lab = Homelab.build(config)
+    metrics = Metrics(mcp_path=config.server.path)
     instructions = (
         "Tools for operating a home lab: a Proxmox VE cluster (VMs and LXC "
         "containers, discovered live), Home Assistant (states, services, "
@@ -123,7 +179,7 @@ def build_server(config: Config) -> tuple[FastMCP, Homelab]:
         "and network discovery. Call homelab_overview first to see what is "
         "configured and reachable."
     )
-    mcp = FastMCP(
+    mcp = InstrumentedFastMCP(
         name="homelab",
         instructions=instructions,
         host=config.server.host,
@@ -131,20 +187,32 @@ def build_server(config: Config) -> tuple[FastMCP, Homelab]:
         streamable_http_path=config.server.path,
         stateless_http=True,
         json_response=True,
+        metrics=metrics,
     )
 
     for module in MODULES:
         module.register(mcp, lab)
 
-    @mcp.custom_route("/health", methods=["GET"])
+    metrics.set_modules(lab.enabled_modules())
+    lab.audit.listeners.append(metrics.record_audit)
+
+    @mcp.custom_route(HEALTH_PATH, methods=["GET"])
     async def health(_request: Request) -> PlainTextResponse:
         return PlainTextResponse("ok")
+
+    @mcp.custom_route(METRICS_PATH, methods=["GET"])
+    async def prometheus_metrics(_request: Request) -> Response:
+        # The registry is small and rendering is pure CPU work in the tens of
+        # microseconds, so it is fine on the event loop.
+        return Response(metrics.render(), media_type=metrics.content_type)
 
     lab.audit.record(
         "server_start",
         modules=lab.enabled_modules(),
         auth=bool(config.server.auth_token),
         allowlist=config.server.allowed_ips,
+        metrics_allowlist=config.server.metrics_allowed_ips,
+        metrics_token=bool(config.server.metrics_token),
     )
     return mcp, lab
 
@@ -194,7 +262,7 @@ def run(config: Config) -> None:
 
     mcp, lab = build_server(config)
     app = mcp.streamable_http_app()
-    app.add_middleware(AuthMiddleware, config=config)
+    app.add_middleware(AuthMiddleware, config=config, metrics=mcp.metrics)
 
     import uvicorn
 

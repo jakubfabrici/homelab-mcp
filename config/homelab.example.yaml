@@ -28,6 +28,13 @@ server:
   # The server refuses to start with no auth_token AND no allowed_ips on a
   # non-loopback bind. Set true only if a front proxy adds its own auth.
   insecure: false
+  # Prometheus: GET /metrics is served to these scraper IPs/CIDRs without a
+  # token, or to anyone presenting `Authorization: Bearer <metrics_token>`
+  # (or the master auth_token). With neither configured only the master
+  # token works. See README "Metrics".
+  metrics_allowed_ips:
+    - 192.168.1.230/32
+  metrics_token: ${MCP_METRICS_TOKEN:-}
 
 proxmox:
   host: 192.168.1.10          # Proxmox node / cluster address
